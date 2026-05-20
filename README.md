@@ -3,31 +3,12 @@
 A production-grade fraud detection service with velocity feature engineering,
 SMOTE-balanced classification, tuned decision thresholds, and live drift monitoring.
 
----
-
-## CV Bullet Pointers (3)
-
-**1. Velocity Feature Engineering + Thread-Safe Rolling State**
-Built a real-time fraud scoring API that computes per-card velocity features
-(txn_count_1hr/24hr, amount_zscore, unique_merchants_1hr) from a thread-safe
-RLock deque store — enabling detection of card-testing bursts and amount anomalies
-missed entirely by static classifiers, with sub-10ms feature retrieval under
-concurrent load.
-
-**2. SMOTE Oversampling + Threshold Tuning on 97:3 Imbalanced Dataset**
-Addressed severe class imbalance (3% fraud rate) using SMOTE to synthetically
-oversample minority class to 1:1 parity, then swept PR-curve thresholds to
-maximize F1 on the fraud class — achieving ROC-AUC 0.989 and fraud-class F1
-0.862 versus 0.12 F1 with a naive default-threshold classifier on the same data.
-
-**3. FastAPI Scoring Layer + Drift Detection Daemon**
-Deployed a <50ms POST /score endpoint returning fraud probability, BLOCK/ALLOW
-decision, and top-3 SHAP-style signals per transaction; a background daemon thread
-computes rolling score mean-shift and PSI on velocity features every 60 seconds,
-firing Slack alerts on drift breach — eliminating silent model degradation between
-retraining cycles.
-
----
+Real-time fraud scoring API that detects card-testing bursts, amount anomalies, 
+and behavioral deviations using per-card velocity features and a SMOTE-balanced 
+LightGBM classifier. Exposes a FastAPI POST /score endpoint (<50ms) returning 
+fraud probability, BLOCK/ALLOW decision, and top-3 signals. Includes a background 
+drift monitor that tracks score distribution and feature PSI, firing Slack alerts 
+on model degradation.
 
 ## Project Structure
 
