@@ -1,0 +1,20 @@
+# model artifacts
+app/models/*.pkl
+app/models/meta.json
+
+# data
+data/transactions.csv
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# venv
+venv/
+.venv/
+
+# ide
+.vscode/
+.idea/
