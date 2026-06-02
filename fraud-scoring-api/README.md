@@ -1,5 +1,5 @@
 # Real-Time Transaction Fraud Scoring API
-**Production-grade fraud detection system — architected for FRM roles (Amex CFR style)**
+**Production-grade fraud detection system — architected for FRM roles **
 
 ---
 
