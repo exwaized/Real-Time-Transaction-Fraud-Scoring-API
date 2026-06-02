@@ -19,6 +19,4 @@ venv/
 .vscode/
 .idea/
 
-# local folders
-dash1/
-fraud-scoring-api/
+
