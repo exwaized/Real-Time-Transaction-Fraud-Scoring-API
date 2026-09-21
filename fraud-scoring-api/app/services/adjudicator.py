@@ -78,10 +78,13 @@ class Adjudicator:
         """
         Actual network call to the adjudicator.
 
-        TODO: this payload/response shape is a placeholder — Jev's real
-        request/response schema isn't wired in yet. Replace once you have
-        their API docs; everything above this method (the gate, the fail-open
-        fallback, the response shape returned to score.py) stays the same.
+        Real Jev (TypeSafe) is closed-source/API-only and unwired here — this
+        targets SemIf (github.com/TheoLeeCJ/SemIf), the top-scoring open
+        source clone on JevBench, run behind the sidecar in semif_sidecar/.
+        That service expects exactly this {situation, allowed_actions}
+        payload and returns {"decision", "reasoning"}. Swapping in real Jev
+        or a different clone later only means changing this method — the
+        gate and fail-open fallback around it stay the same.
         """
         payload = {
             "situation": {
@@ -98,7 +101,7 @@ class Adjudicator:
             JEV_ENDPOINT,
             json=payload,
             headers={"Authorization": f"Bearer {JEV_API_KEY}"},
-            timeout=2.0,
+            timeout=5.0,  # GPU forward pass over the network, not a cache hit
         )
         resp.raise_for_status()
         data = resp.json()

@@ -12,6 +12,9 @@ services:
       - MODEL_DIR=/app/models
       - CHALLENGER_RATIO=0.10
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+      - JEV_ENDPOINT=${JEV_ENDPOINT:-}
+      - JEV_API_KEY=${JEV_API_KEY:-}
+      - REVIEW_MARGIN=${REVIEW_MARGIN:-0.05}
     volumes:
       - ./models:/app/models:ro
     healthcheck:
@@ -53,6 +56,30 @@ services:
       - fraud-net
     depends_on:
       - prometheus
+    restart: unless-stopped
+
+  # Optional GPU-backed adjudicator for borderline scores (app/services/adjudicator.py).
+  # Not started by default — needs an NVIDIA GPU + nvidia-container-toolkit on the host.
+  # Enable with: docker compose --profile semif up
+  semif-sidecar:
+    build:
+      context: ./semif_sidecar
+      dockerfile: Dockerfile
+    container_name: semif-sidecar
+    profiles: ["semif"]
+    ports:
+      - "8600:8600"
+    environment:
+      - SEMIF_API_KEY=${JEV_API_KEY:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - fraud-net
     restart: unless-stopped
 
   mlflow:
