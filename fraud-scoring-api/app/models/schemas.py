@@ -17,6 +17,8 @@ class FraudScoreResponse(BaseModel):
     velocity: dict
     behavioral_profile: dict
     latency_ms: float
+    reviewed: bool = False
+    review_reasoning: Optional[str] = None
 
 class HealthResponse(BaseModel):
     status: str

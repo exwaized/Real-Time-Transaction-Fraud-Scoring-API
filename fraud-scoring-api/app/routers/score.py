@@ -7,6 +7,7 @@ from app.services.scorer import fraud_scorer
 from app.services.drift import drift_monitor
 from app.services.auth import verify_api_key
 from app.services.rate_limit import rate_limiter
+from app.services.adjudicator import adjudicator
 import time
 
 router = APIRouter()
@@ -50,10 +51,26 @@ def score_transaction(txn: TransactionRequest):
         # 5. Behavioral profile
         profile = velocity_engine.get_profile(txn.card_id)
 
+        # 6. Borderline scores get a second opinion; everything else is untouched
+        reviewed = False
+        review_reasoning = None
+        if adjudicator.needs_review(result["fraud_probability"], fraud_scorer.threshold):
+            outcome = adjudicator.review(
+                amount=txn.amount,
+                velocity=velocity,
+                profile=profile,
+                signals=result["top_signals"],
+                prob=result["fraud_probability"],
+                threshold=fraud_scorer.threshold,
+            )
+            result["decision"] = outcome["decision"]
+            reviewed = outcome["reviewed"]
+            review_reasoning = outcome["reasoning"]
+
         logger.info(
             f"SCORED card={txn.card_id} amount={txn.amount} "
             f"prob={result['fraud_probability']} decision={result['decision']} "
-            f"latency={result['latency_ms']}ms"
+            f"reviewed={reviewed} latency={result['latency_ms']}ms"
         )
 
         return FraudScoreResponse(
@@ -61,6 +78,8 @@ def score_transaction(txn: TransactionRequest):
             **result,
             velocity=velocity,
             behavioral_profile=profile,
+            reviewed=reviewed,
+            review_reasoning=review_reasoning,
         )
 
     except HTTPException:
