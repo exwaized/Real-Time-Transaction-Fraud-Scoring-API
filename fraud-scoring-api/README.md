@@ -6,44 +6,51 @@
 ## Quick Start
 
 ```bash
-# 1. Train models (generates /models/ artifacts)
+# 1. Configure secrets (compose refuses to start without these two)
+cp .env.example .env
+python -c "import secrets; print(secrets.token_urlsafe(32))"   # use for FRAUD_API_KEY
+python -c "import secrets; print(secrets.token_urlsafe(16))"   # use for GRAFANA_ADMIN_PASSWORD
+# edit .env: set FRAUD_API_KEY and GRAFANA_ADMIN_PASSWORD
+
+# 2. Train models (writes app/models/*.pkl + meta.json; these are gitignored,
+#    so every fresh clone must run this once)
 pip install -r requirements.txt
 python train.py
 
-# 2. Launch full stack (API + Prometheus + Grafana + MLflow)
-docker-compose up --build
+# 3. Launch the stack (API + Redis + Prometheus + Grafana + MLflow + sidecar)
+docker compose up -d --build
 
-# 3. Score a transaction
-curl -X POST http://localhost:8000/score \
-  -H "Content-Type: application/json" \
-  -d '{
-    "transaction_id": "TXN_001",
-    "card_id": 4521,
-    "transaction_amt": 1800.00,
-    "product_cd": "W",
-    "transaction_dt": 1700000000,
-    "balance_before": 2000.0,
-    "balance_after": 200.0,
-    "merchant_id": 321,
-    "card_country": "NG",
-    "card_txn_count_24hr": 18,
-    "merchant_txn_freq": 45
+# 4. Score a transaction
+curl -X POST http://localhost:8000/score   -H "Content-Type: application/json"   -H "X-API-Key: $FRAUD_API_KEY"   -d '{
+    "card_id": "card_0042",
+    "merchant_id": "merch_017",
+    "amount": 1800.00,
+    "merchant_category": "electronics",
+    "timestamp": "2025-05-19T03:22:11"
   }'
 
-# 4. Run tests
+# 5. Run tests (needs the trained models from step 2)
 pytest tests/ -v
 
-# 5. Benchmark latency
+# 6. Benchmark latency
 python load_test.py
 ```
 
-**Dashboards:**
+Auth fails closed: if `FRAUD_API_KEY` is unset the API returns 503 on every
+protected route. For local non-Docker development only, set
+`ALLOW_INSECURE_NO_AUTH=true` to bypass it.
+
+**Endpoints & dashboards:**
 | Service | URL | Credentials |
 |---|---|---|
 | API Docs | http://localhost:8000/docs | — |
-| Grafana | http://localhost:3000 | admin / fraud123 |
+| Liveness probe | http://localhost:8000/healthz | — (no key) |
+| Metrics | http://localhost:8000/metrics | — (keep internal; don't expose publicly) |
+| Grafana | http://localhost:3000 | `admin` / your `GRAFANA_ADMIN_PASSWORD` |
 | Prometheus | http://localhost:9090 | — |
 | MLflow | http://localhost:5000 | — |
+
+Grafana, Prometheus, Redis and MLflow bind to localhost only.
 
 ---
 
