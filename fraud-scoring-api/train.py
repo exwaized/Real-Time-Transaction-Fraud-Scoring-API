@@ -6,6 +6,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import classification_report, precision_recall_curve, roc_auc_score
 from imblearn.over_sampling import SMOTE
 import lightgbm as lgb
+import xgboost as xgb
 warnings.filterwarnings("ignore")
 
 os.makedirs("app/models", exist_ok=True)
@@ -43,32 +44,62 @@ X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratif
 X_res, y_res = SMOTE(random_state=42).fit_resample(X_train, y_train)
 print(f"After SMOTE — 0: {(y_res==0).sum()} 1: {(y_res==1).sum()}")
 
-# ── Scale + train ──────────────────────────────────────────────────────────────
+# ── Scale + train Champion (LightGBM, trained on SMOTE-resampled data) ─────────
 scaler = StandardScaler()
 X_res_s = scaler.fit_transform(X_res)
 X_test_s = scaler.transform(X_test)
 
-model = lgb.LGBMClassifier(n_estimators=300, learning_rate=0.05,
-                            max_depth=6, class_weight="balanced",
-                            random_state=42, verbose=-1)
-model.fit(X_res_s, y_res)
+champion = lgb.LGBMClassifier(n_estimators=300, learning_rate=0.05,
+                               max_depth=6, class_weight="balanced",
+                               random_state=42, verbose=-1)
+champion.fit(X_res_s, y_res)
 
-# ── Threshold tuning ───────────────────────────────────────────────────────────
-probs = model.predict_proba(X_test_s)[:, 1]
+probs = champion.predict_proba(X_test_s)[:, 1]
 p, r, t = precision_recall_curve(y_test, probs)
 f1s = 2*p*r/(p+r+1e-9)
-best_thresh = float(t[np.argmax(f1s[:-1])])
-auc = roc_auc_score(y_test, probs)
-print(f"Threshold: {best_thresh:.3f} | ROC-AUC: {auc:.3f}")
-print(classification_report(y_test, (probs>=best_thresh).astype(int), target_names=["legit","fraud"]))
+champion_thresh = float(t[np.argmax(f1s[:-1])])
+champion_auc = roc_auc_score(y_test, probs)
+print(f"[Champion LGBM] Threshold: {champion_thresh:.3f} | ROC-AUC: {champion_auc:.3f}")
+print(classification_report(y_test, (probs>=champion_thresh).astype(int), target_names=["legit","fraud"]))
+
+# ── Train Challenger (XGBoost, trained on the raw imbalanced split via
+#    scale_pos_weight instead of SMOTE — same scaler, so both models see
+#    features on the same footing at inference time) ───────────────────────────
+X_train_s = scaler.transform(X_train)
+scale_pos_weight = float((y_train == 0).sum()) / float((y_train == 1).sum())
+challenger = xgb.XGBClassifier(n_estimators=300, learning_rate=0.05,
+                                max_depth=6, scale_pos_weight=scale_pos_weight,
+                                random_state=42, eval_metric="logloss", verbosity=0)
+challenger.fit(X_train_s, y_train)
+
+challenger_probs = challenger.predict_proba(X_test_s)[:, 1]
+cp, cr, ct = precision_recall_curve(y_test, challenger_probs)
+cf1s = 2*cp*cr/(cp+cr+1e-9)
+challenger_thresh = float(ct[np.argmax(cf1s[:-1])])
+challenger_auc = roc_auc_score(y_test, challenger_probs)
+print(f"[Challenger XGB] Threshold: {challenger_thresh:.3f} | ROC-AUC: {challenger_auc:.3f}")
+print(classification_report(y_test, (challenger_probs>=challenger_thresh).astype(int), target_names=["legit","fraud"]))
 
 # ── Save ───────────────────────────────────────────────────────────────────────
-pickle.dump(model,  open("app/models/model.pkl",  "wb"))
-pickle.dump(scaler, open("app/models/scaler.pkl", "wb"))
+pickle.dump(champion,   open("app/models/champion_model.pkl",   "wb"))
+pickle.dump(challenger, open("app/models/challenger_model.pkl", "wb"))
+pickle.dump(scaler,     open("app/models/scaler.pkl",           "wb"))
 json.dump({
-    "threshold": best_thresh, "features": FEATURES,
-    "roc_auc": round(auc,4),
-    "best_f1": round(float(np.max(f1s[:-1])),4),
-    "feature_importances": dict(zip(FEATURES, model.feature_importances_.tolist()))
-}, open("app/models/meta.json","w"), indent=2)
-print("✓ Saved to app/models/")
+    "features": FEATURES,
+    "challenger_ratio_default": 0.1,
+    "champion": {
+        "type": "lightgbm",
+        "threshold": champion_thresh,
+        "roc_auc": round(champion_auc, 4),
+        "best_f1": round(float(np.max(f1s[:-1])), 4),
+        "feature_importances": dict(zip(FEATURES, champion.feature_importances_.tolist())),
+    },
+    "challenger": {
+        "type": "xgboost",
+        "threshold": challenger_thresh,
+        "roc_auc": round(challenger_auc, 4),
+        "best_f1": round(float(np.max(cf1s[:-1])), 4),
+        "feature_importances": dict(zip(FEATURES, challenger.feature_importances_.tolist())),
+    },
+}, open("app/models/meta.json", "w"), indent=2)
+print("Saved champion + challenger to app/models/")

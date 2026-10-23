@@ -20,3 +20,6 @@ venv/
 .idea/
 
 
+
+# local scratch verification scripts
+.verify_*.py

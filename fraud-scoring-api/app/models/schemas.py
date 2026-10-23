@@ -11,6 +11,9 @@ class TransactionRequest(BaseModel):
 class FraudScoreResponse(BaseModel):
     card_id: str
     fraud_probability: float
+    champion_probability: float
+    challenger_probability: float
+    model_used: str
     decision: str
     threshold_used: float
     top_signals: List[str]

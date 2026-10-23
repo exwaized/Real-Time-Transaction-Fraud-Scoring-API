@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fraud-scoring-api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"        # matches the Dockerfile
+          cache: pip
+          cache-dependency-path: fraud-scoring-api/requirements.txt
+      - run: sudo apt-get update && sudo apt-get install -y libgomp1
+        working-directory: .
+      - run: pip install -r requirements.txt
+      # Model artifacts are gitignored; without them the test module skips and
+      # CI would pass while testing nothing, so train and then assert they exist.
+      - run: python train.py
+      - run: test -f app/models/champion_model.pkl && test -f app/models/meta.json
+      - name: Run tests (fail if any are skipped)
+        run: python -m pytest tests -v -rs --strict-markers | tee pytest.out && ! grep -qE "[0-9]+ skipped" pytest.out
+
+  compose-config:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fraud-scoring-api
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compose file is valid and requires secrets
+        run: |
+          ! docker compose config >/dev/null 2>&1   # must fail without secrets
+          FRAUD_API_KEY=x GRAFANA_ADMIN_PASSWORD=y docker compose config >/dev/null
