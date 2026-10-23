@@ -12,7 +12,7 @@
       "gridPos": {"x": 0, "y": 0, "w": 8, "h": 6},
       "targets": [{
         "expr": "rate(fraud_api_requests_total[1m])",
-        "legendFormat": "{{risk_tier}} / {{model}}"
+        "legendFormat": "{{decision}} / {{model_used}}"
       }]
     },
     {
@@ -30,7 +30,7 @@
           ]
         }
       },
-      "targets": [{"expr": "fraud_rate_rolling_5min", "legendFormat": "Fraud Rate"}]
+      "targets": [{"expr": "sum(rate(fraud_api_requests_total{decision=\"BLOCK\"}[5m])) / sum(rate(fraud_api_requests_total[5m]))", "legendFormat": "Fraud Rate"}]
     },
     {
       "id": 3,
@@ -65,22 +65,22 @@
     },
     {
       "id": 6,
-      "title": "Risk Tier Breakdown",
+      "title": "Decision Breakdown",
       "type": "piechart",
       "gridPos": {"x": 12, "y": 6, "w": 6, "h": 6},
       "targets": [{
-        "expr": "sum by (risk_tier) (fraud_api_requests_total)",
-        "legendFormat": "{{risk_tier}}"
+        "expr": "sum by (decision) (fraud_api_requests_total)",
+        "legendFormat": "{{decision}}"
       }]
     },
     {
       "id": 7,
-      "title": "Rule-Based Flag Rate",
+      "title": "Risk Signal Rate",
       "type": "timeseries",
       "gridPos": {"x": 18, "y": 6, "w": 6, "h": 6},
       "targets": [{
-        "expr": "rate(rule_based_flags_total[1m])",
-        "legendFormat": "{{rule}}"
+        "expr": "sum by (signal) (rate(fraud_api_signals_total[1m]))",
+        "legendFormat": "{{signal}}"
       }]
     },
     {

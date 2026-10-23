@@ -79,12 +79,12 @@ class Adjudicator:
         Actual network call to the adjudicator.
 
         Real Jev (TypeSafe) is closed-source/API-only and unwired here — this
-        targets SemIf (github.com/TheoLeeCJ/SemIf), the top-scoring open
-        source clone on JevBench, run behind the sidecar in semif_sidecar/.
-        That service expects exactly this {situation, allowed_actions}
-        payload and returns {"decision", "reasoning"}. Swapping in real Jev
-        or a different clone later only means changing this method — the
-        gate and fail-open fallback around it stay the same.
+        targets the sidecar in semif_sidecar/, which runs Laya (a small
+        CPU-only open decision model) behind exactly this {situation,
+        allowed_actions} -> {"decision", "reasoning"} contract. Swapping in
+        real Jev or a different backend later only means changing what's
+        behind that sidecar's /decide route — this method, and the gate and
+        fail-open fallback around it, don't need to change.
         """
         payload = {
             "situation": {

@@ -8,6 +8,11 @@ from app.services.drift import drift_monitor
 from app.services.auth import verify_api_key
 from app.services.rate_limit import rate_limiter
 from app.services.adjudicator import adjudicator
+from app.services.divergence import divergence_log
+from app.services.metrics import (
+    REQUESTS, ERRORS, SCORE_DISTRIBUTION, CHALLENGER_DIVERGENCE, SIGNALS, ADJUDICATOR_FALLBACKS, SCORE_LATENCY, render as render_metrics,
+)
+from fastapi import Response
 import time
 
 router = APIRouter()
@@ -26,7 +31,11 @@ def score_transaction(txn: TransactionRequest):
     Requires X-API-Key header. Rate limited to 60 req/min per key.
     """
     try:
-        ts = datetime.fromisoformat(txn.timestamp) if txn.timestamp else datetime.now()
+        _t0 = time.perf_counter()
+        try:
+            ts = datetime.fromisoformat(txn.timestamp) if txn.timestamp else datetime.now()
+        except ValueError:
+            raise HTTPException(status_code=422, detail="timestamp must be ISO 8601")
         hour        = ts.hour
         day_of_week = ts.weekday()
 
@@ -54,18 +63,28 @@ def score_transaction(txn: TransactionRequest):
         # 6. Borderline scores get a second opinion; everything else is untouched
         reviewed = False
         review_reasoning = None
-        if adjudicator.needs_review(result["fraud_probability"], fraud_scorer.threshold):
+        if adjudicator.needs_review(result["fraud_probability"], result["threshold_used"]):
             outcome = adjudicator.review(
                 amount=txn.amount,
                 velocity=velocity,
                 profile=profile,
                 signals=result["top_signals"],
                 prob=result["fraud_probability"],
-                threshold=fraud_scorer.threshold,
+                threshold=result["threshold_used"],
             )
             result["decision"] = outcome["decision"]
             reviewed = outcome["reviewed"]
             review_reasoning = outcome["reasoning"]
+            if not reviewed:
+                ADJUDICATOR_FALLBACKS.inc()
+
+        REQUESTS.labels(result["decision"], result["model_used"]).inc()
+        SCORE_DISTRIBUTION.observe(result["fraud_probability"])
+        CHALLENGER_DIVERGENCE.observe(
+            abs(result["champion_probability"] - result["challenger_probability"]))
+        for sig in result["top_signals"]:
+            SIGNALS.labels(sig.split("=")[0]).inc()
+        SCORE_LATENCY.observe(time.perf_counter() - _t0)
 
         logger.info(
             f"SCORED card={txn.card_id} amount={txn.amount} "
@@ -85,8 +104,23 @@ def score_transaction(txn: TransactionRequest):
     except HTTPException:
         raise
     except Exception as e:
+        ERRORS.inc()
         logger.error(f"Scoring error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal scoring error")
+
+
+@router.get("/healthz")
+def healthz():
+    """Unauthenticated liveness probe for load balancers / docker healthcheck."""
+    return {"status": "ok"}
+
+
+@router.get("/metrics", include_in_schema=False)
+def metrics():
+    # Unauthenticated so Prometheus can scrape; expose only on the internal
+    # network (reverse proxy should not route /metrics publicly).
+    body, content_type = render_metrics()
+    return Response(content=body, media_type=content_type)
 
 
 @router.get("/health", response_model=HealthResponse, dependencies=[Depends(protected)])
@@ -97,6 +131,13 @@ def health():
         drift_status=drift_monitor.get_status(),
         uptime_sec=round(time.time() - START_TIME, 1),
     )
+
+
+@router.get("/challenger/divergence", dependencies=[Depends(protected)])
+def challenger_divergence():
+    """Last 100 champion vs challenger score delta records."""
+    records = divergence_log.get_records()
+    return {"records": records, "count": len(records)}
 
 
 @router.get("/model/info", dependencies=[Depends(protected)])

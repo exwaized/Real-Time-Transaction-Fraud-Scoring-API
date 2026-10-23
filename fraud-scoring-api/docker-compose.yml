@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   fraud-api:
     build:
@@ -10,17 +8,47 @@ services:
       - "8000:8000"
     environment:
       - MODEL_DIR=/app/models
+      - FRAUD_API_KEY=${FRAUD_API_KEY:?set FRAUD_API_KEY in .env}
+      - ENV=${ENV:-development}
       - CHALLENGER_RATIO=0.10
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
-      - JEV_ENDPOINT=${JEV_ENDPOINT:-}
+      # Defaults to the sidecar below — adjudicator.py still fails open
+      # (falls back to the raw threshold decision) unless JEV_API_KEY is
+      # also set, so this alone doesn't turn review on.
+      - JEV_ENDPOINT=${JEV_ENDPOINT:-http://semif-sidecar:8600/decide}
       - JEV_API_KEY=${JEV_API_KEY:-}
       - REVIEW_MARGIN=${REVIEW_MARGIN:-0.05}
+      # Shared divergence log across all --workers of this container (and any
+      # other replica pointed at the same Redis) — see app/services/divergence.py.
+      - REDIS_URL=redis://redis:6379/0
     volumes:
-      - ./models:/app/models:ro
+      # scorer.py resolves models relative to itself (app/services/scorer.py →
+      # parent.parent/models), i.e. /app/app/models inside the container — not
+      # /app/models. MODEL_DIR env var below is not actually read by scorer.py.
+      - ./app/models:/app/app/models:ro
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
       interval: 15s
       timeout: 5s
+      retries: 3
+    depends_on:
+      - redis
+      - semif-sidecar
+    networks:
+      - fraud-net
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: fraud-redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
       retries: 3
     networks:
       - fraud-net
@@ -30,7 +58,7 @@ services:
     image: prom/prometheus:v2.47.0
     container_name: prometheus
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     command:
@@ -44,9 +72,9 @@ services:
     image: grafana/grafana:10.1.2
     container_name: grafana
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=fraud123
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
       - GF_USERS_ALLOW_SIGN_UP=false
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -58,26 +86,24 @@ services:
       - prometheus
     restart: unless-stopped
 
-  # Optional GPU-backed adjudicator for borderline scores (app/services/adjudicator.py).
-  # Not started by default — needs an NVIDIA GPU + nvidia-container-toolkit on the host.
-  # Enable with: docker compose --profile semif up
+  # Adjudicator sidecar for borderline scores (app/services/adjudicator.py) —
+  # Laya, a small CPU-only decision model (see semif_sidecar/main.py). No GPU
+  # needed and no profile gate: it's cheap enough to run by default.
   semif-sidecar:
     build:
       context: ./semif_sidecar
       dockerfile: Dockerfile
     container_name: semif-sidecar
-    profiles: ["semif"]
-    ports:
-      - "8600:8600"
+    expose:
+      - "8600"
     environment:
       - SEMIF_API_KEY=${JEV_API_KEY:-}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8600/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 60s   # first call downloads the checkpoint from HF hub
     networks:
       - fraud-net
     restart: unless-stopped
@@ -86,7 +112,7 @@ services:
     image: python:3.11-slim
     container_name: mlflow
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
     command: >
       bash -c "pip install mlflow -q && mlflow server
       --host 0.0.0.0 --port 5000
@@ -104,3 +130,4 @@ networks:
 
 volumes:
   grafana-data:
+  redis-data:

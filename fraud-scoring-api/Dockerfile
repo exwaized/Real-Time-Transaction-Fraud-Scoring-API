@@ -10,11 +10,15 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ ./app/
-COPY models/ ./models/
+COPY main.py .
 
 ENV MODEL_DIR=/app/models
 ENV PYTHONUNBUFFERED=1
+ENV PROMETHEUS_MULTIPROC_DIR=/tmp/prom_multiproc
+RUN mkdir -p /tmp/prom_multiproc && useradd -r -u 10001 appuser \
+    && chown -R appuser /tmp/prom_multiproc /app
+USER appuser
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
