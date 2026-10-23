@@ -30,7 +30,7 @@
           ]
         }
       },
-      "targets": [{"expr": "sum(rate(fraud_api_requests_total{decision=\"BLOCK\"}[5m])) / sum(rate(fraud_api_requests_total[5m]))", "legendFormat": "Fraud Rate"}]
+      "targets": [{"expr": "sum(rate(fraud_api_requests_total{decision=\"BLOCK\"}[5m])) / clamp_min(sum(rate(fraud_api_requests_total[5m])), 1e-9)", "legendFormat": "Fraud Rate"}]
     },
     {
       "id": 3,
@@ -38,7 +38,7 @@
       "type": "stat",
       "gridPos": {"x": 12, "y": 0, "w": 4, "h": 6},
       "targets": [{
-        "expr": "histogram_quantile(0.99, rate(fraud_score_latency_seconds_bucket[5m])) * 1000",
+        "expr": "(histogram_quantile(0.99, sum by (le) (rate(fraud_score_latency_seconds_bucket[5m]))) * 1000) > 0",
         "legendFormat": "p99 ms"
       }]
     },
