@@ -36,8 +36,11 @@ pytest tests/ -v
 python load_test.py
 ```
 
-Auth fails closed: if `FRAUD_API_KEY` is unset the API returns 503 on every
-protected route. For local non-Docker development only, set
+Auth fails closed: if no API key is configured the API returns 503 on every
+protected route. Prefer one key per caller (`FRAUD_API_KEYS=payments=<key>,risk-ui=<key>`)
+with per-client limits (`FRAUD_RATE_LIMITS=payments=600`, default 60 req/min); a single
+shared `FRAUD_API_KEY` still works as client `default`. Set `CARD_HASH_SALT` to a long
+random value so card IDs are hashed in logs and Redis keys. For local non-Docker development only, set
 `ALLOW_INSECURE_NO_AUTH=true` to bypass it.
 
 **Endpoints & dashboards:**
@@ -51,6 +54,10 @@ protected route. For local non-Docker development only, set
 | MLflow | http://localhost:5000 | — |
 
 Grafana, Prometheus, Redis and MLflow bind to localhost only.
+
+**Alerts** (`monitoring/prometheus/alerts.yml`, visible at http://localhost:9090/alerts; wire an
+Alertmanager to get paged): API down, Redis degraded (`fraud_api_shared_state_degraded == 1`),
+>1% 500s, p99 latency >500ms, adjudicator fallbacks.
 
 ---
 

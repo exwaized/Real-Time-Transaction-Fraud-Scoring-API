@@ -62,6 +62,7 @@ class TestAuth:
 
     def test_unset_key_fails_closed(self, client, monkeypatch):
         monkeypatch.delenv("FRAUD_API_KEY")
+        monkeypatch.delenv("FRAUD_API_KEYS", raising=False)
         monkeypatch.delenv("ALLOW_INSECURE_NO_AUTH", raising=False)
         assert client.post("/score", json=BASE_TXN).status_code == 503
         assert client.post("/score", json=BASE_TXN, headers=AUTH).status_code == 503
@@ -70,6 +71,41 @@ class TestAuth:
         monkeypatch.delenv("FRAUD_API_KEY")
         monkeypatch.setenv("ALLOW_INSECURE_NO_AUTH", "true")
         assert client.post("/score", json=BASE_TXN).status_code == 200
+
+
+class TestPerClientKeys:
+    def test_each_client_key_works_and_unknown_rejected(self, client, monkeypatch):
+        monkeypatch.setenv("FRAUD_API_KEYS", "payments=key-pay,risk=key-risk")
+        for k in ("key-pay", "key-risk", TEST_KEY):
+            assert client.get("/health", headers={"X-API-Key": k}).status_code == 200
+        assert client.get("/health", headers={"X-API-Key": "key-other"}).status_code == 401
+
+    def test_limits_are_per_client(self, client, monkeypatch):
+        monkeypatch.setenv("FRAUD_API_KEYS", "payments=key-pay,risk=key-risk")
+        monkeypatch.setenv("FRAUD_RATE_LIMITS", "payments=5,risk=2")
+        pay = [client.get("/health", headers={"X-API-Key": "key-pay"}).status_code for _ in range(6)]
+        risk = [client.get("/health", headers={"X-API-Key": "key-risk"}).status_code for _ in range(3)]
+        assert pay == [200] * 5 + [429]
+        assert risk == [200, 200, 429]      # one client's quota doesn't affect another
+
+    def test_secret_never_used_as_rate_limit_key(self, client, monkeypatch, fresh_rate_limiter):
+        monkeypatch.setenv("FRAUD_API_KEYS", "payments=key-pay-secret")
+        client.get("/health", headers={"X-API-Key": "key-pay-secret"})
+        assert "key-pay-secret" not in " ".join(fresh_rate_limiter._windows)
+        assert "payments" in fresh_rate_limiter._windows
+
+    def test_invalid_limit_value_falls_back_to_default(self, client, monkeypatch):
+        monkeypatch.setenv("FRAUD_RATE_LIMITS", "default=notanumber")
+        assert client.get("/health", headers=AUTH).status_code == 200
+
+
+class TestLogPrivacy:
+    def test_card_id_not_logged_in_plaintext(self, client, caplog):
+        import logging
+        with caplog.at_level(logging.INFO, logger="router"):
+            client.post("/score", json={**BASE_TXN, "card_id": "4111111111111111"}, headers=AUTH)
+        assert "SCORED" in caplog.text
+        assert "4111111111111111" not in caplog.text
 
 
 class TestHealth:

@@ -15,7 +15,9 @@ from collections import deque, defaultdict
 from dataclasses import dataclass, asdict
 from typing import Dict, List
 
+from app.services import redis_client
 from app.services.redis_client import get_redis
+from app.services.privacy import card_ref
 
 logger = logging.getLogger("velocity")
 
@@ -47,15 +49,18 @@ class VelocityEngine:
         if r is not None:
             try:
                 self._record_redis(r, card_id, rec)
+                redis_client.mark_ok()
                 return
             except Exception as e:
+                redis_client.mark_failure(e)
                 logger.warning(f"Redis velocity write failed ({e}); recording in-process")
         with self._lock:
             self._store[card_id].append(rec)
         self._update_profile(card_id, rec)
 
     def _record_redis(self, r, card_id: str, rec: TxnRecord):
-        wkey, pkey = f"fraud:vel:{card_id}", f"fraud:prof:{card_id}"
+        ref = card_ref(card_id)
+        wkey, pkey = f"fraud:vel:{ref}", f"fraud:prof:{ref}"
         hour = datetime.datetime.fromtimestamp(rec.timestamp).hour
         pipe = r.pipeline(transaction=True)
         pipe.rpush(wkey, json.dumps(asdict(rec)))
@@ -73,9 +78,12 @@ class VelocityEngine:
         r = get_redis()
         if r is not None:
             try:
-                return [TxnRecord(**json.loads(x))
-                        for x in r.lrange(f"fraud:vel:{card_id}", 0, -1)]
+                recs = [TxnRecord(**json.loads(x))
+                        for x in r.lrange(f"fraud:vel:{card_ref(card_id)}", 0, -1)]
+                redis_client.mark_ok()
+                return recs
             except Exception as e:
+                redis_client.mark_failure(e)
                 logger.warning(f"Redis velocity read failed ({e}); using in-process window")
         with self._lock:
             return list(self._store.get(card_id, []))
@@ -128,7 +136,7 @@ class VelocityEngine:
         r = get_redis()
         if r is not None:
             try:
-                h = r.hgetall(f"fraud:prof:{card_id}")
+                h = r.hgetall(f"fraud:prof:{card_ref(card_id)}")
                 if not h:
                     return None
                 return {
@@ -138,6 +146,7 @@ class VelocityEngine:
                     "categories": {k[4:]: int(v) for k, v in h.items() if k.startswith("cat:")},
                 }
             except Exception as e:
+                redis_client.mark_failure(e)
                 logger.warning(f"Redis profile read failed ({e}); using in-process profile")
         with self._profile_lock:
             p = self._profiles.get(card_id)

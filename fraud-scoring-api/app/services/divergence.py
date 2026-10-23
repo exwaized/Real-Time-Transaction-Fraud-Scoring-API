@@ -16,6 +16,9 @@ import logging
 import threading
 from collections import deque
 
+from app.services import redis_client
+from app.services.redis_client import get_redis
+
 logger = logging.getLogger("divergence")
 
 REDIS_KEY = "fraud:divergence"
@@ -26,21 +29,6 @@ class DivergenceLog:
         self.maxlen = maxlen
         self._records = deque(maxlen=maxlen)   # fallback store
         self._lock = threading.Lock()
-        self._redis = None
-
-        redis_url = os.getenv("REDIS_URL")
-        if not redis_url:
-            logger.info("REDIS_URL not set — divergence log is per-process (single-worker only)")
-            return
-
-        try:
-            import redis
-            client = redis.from_url(redis_url, socket_connect_timeout=2, decode_responses=True)
-            client.ping()
-            self._redis = client
-            logger.info(f"DivergenceLog backed by Redis ({redis_url}) — shared across workers")
-        except Exception as e:
-            logger.warning(f"REDIS_URL set but Redis unreachable ({e}); falling back to in-process log")
 
     def record(self, champion_prob: float, challenger_prob: float, routed_model: str) -> None:
         entry = {
@@ -51,25 +39,31 @@ class DivergenceLog:
             "routed_model": routed_model,
         }
 
-        if self._redis is not None:
+        r = get_redis()
+        if r is not None:
             try:
-                pipe = self._redis.pipeline()
+                pipe = r.pipeline()
                 pipe.rpush(REDIS_KEY, json.dumps(entry))
                 pipe.ltrim(REDIS_KEY, -self.maxlen, -1)
                 pipe.execute()
+                redis_client.mark_ok()
                 return
             except Exception as e:
+                redis_client.mark_failure(e)
                 logger.warning(f"Redis write failed ({e}); recording in-process instead")
 
         with self._lock:
             self._records.append(entry)
 
     def get_records(self) -> list:
-        if self._redis is not None:
+        r = get_redis()
+        if r is not None:
             try:
-                raw = self._redis.lrange(REDIS_KEY, 0, -1)
-                return [json.loads(r) for r in raw]
+                raw = r.lrange(REDIS_KEY, 0, -1)
+                redis_client.mark_ok()
+                return [json.loads(x) for x in raw]
             except Exception as e:
+                redis_client.mark_failure(e)
                 logger.warning(f"Redis read failed ({e}); serving in-process log")
 
         with self._lock:

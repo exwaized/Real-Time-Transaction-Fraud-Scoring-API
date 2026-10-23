@@ -5,7 +5,8 @@ from app.models.schemas import TransactionRequest, FraudScoreResponse, HealthRes
 from app.services.velocity import velocity_engine
 from app.services.scorer import fraud_scorer
 from app.services.drift import drift_monitor
-from app.services.auth import verify_api_key
+from app.services.auth import verify_api_key, client_rate_limit
+from app.services.privacy import card_ref
 from app.services.rate_limit import rate_limiter
 from app.services.adjudicator import adjudicator
 from app.services.divergence import divergence_log
@@ -20,15 +21,15 @@ logger = logging.getLogger("router")
 START_TIME = time.time()
 
 # Reusable dependency: auth + rate limit together
-def protected(api_key: str = Depends(verify_api_key)):
-    rate_limiter.check(api_key)
-    return api_key
+def protected(client: str = Depends(verify_api_key)):
+    rate_limiter.check(client, client_rate_limit(client))
+    return client
 
 @router.post("/score", response_model=FraudScoreResponse, dependencies=[Depends(protected)])
 def score_transaction(txn: TransactionRequest):
     """
     Score a transaction for fraud.
-    Requires X-API-Key header. Rate limited to 60 req/min per key.
+    Requires X-API-Key header. Rate limited per client (default 60 req/min).
     """
     try:
         _t0 = time.perf_counter()
@@ -87,7 +88,7 @@ def score_transaction(txn: TransactionRequest):
         SCORE_LATENCY.observe(time.perf_counter() - _t0)
 
         logger.info(
-            f"SCORED card={txn.card_id} amount={txn.amount} "
+            f"SCORED card={card_ref(txn.card_id)} amount={txn.amount} "
             f"prob={result['fraud_probability']} decision={result['decision']} "
             f"reviewed={reviewed} latency={result['latency_ms']}ms"
         )

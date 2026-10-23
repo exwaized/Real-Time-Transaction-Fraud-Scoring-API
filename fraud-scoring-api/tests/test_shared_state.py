@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.services import redis_client  # noqa: E402
 from app.services.rate_limit import RateLimiter  # noqa: E402
 from app.services.velocity import VelocityEngine  # noqa: E402
+from app.services.privacy import card_ref  # noqa: E402
 
 
 @pytest.fixture
@@ -64,9 +65,9 @@ class TestVelocityShared:
         eng = VelocityEngine()
         for _ in range(510):
             eng.record("c3", 10.0, "m", "online")
-        assert fake_redis.llen("fraud:vel:c3") == 500
-        assert 0 < fake_redis.ttl("fraud:vel:c3") <= 7 * 86400
-        assert 0 < fake_redis.ttl("fraud:prof:c3") <= 7 * 86400
+        assert fake_redis.llen(f"fraud:vel:{card_ref('c3')}") == 500
+        assert 0 < fake_redis.ttl(f"fraud:vel:{card_ref('c3')}") <= 7 * 86400
+        assert 0 < fake_redis.ttl(f"fraud:prof:{card_ref('c3')}") <= 7 * 86400
 
     def test_redis_failure_falls_back_in_process(self):
         redis_client.set_redis_for_tests(BrokenRedis())
@@ -167,3 +168,38 @@ class TestRedisReconnect:
         for _ in range(100):
             assert redis_client.get_redis() is None
         assert calls["n"] == 1
+
+
+class TestRedisDegradedSignal:
+    def test_failure_flips_gauge_and_skips_redis_until_retry(self, monkeypatch):
+        from app.services.metrics import SHARED_STATE_DEGRADED
+        redis_client.set_redis_for_tests(BrokenRedis())
+        try:
+            rl = RateLimiter(max_requests=5, window_sec=60)
+            rl.check("k")                              # Redis call fails -> degraded
+            assert SHARED_STATE_DEGRADED._value.get() == 1
+            assert redis_client.get_redis() is None    # later calls skip Redis (no timeout tax)
+        finally:
+            redis_client.set_redis_for_tests(None)
+
+    def test_success_after_failure_restores_gauge(self, fake_redis):
+        from app.services.metrics import SHARED_STATE_DEGRADED
+        redis_client.mark_failure(ConnectionError("x"))
+        assert SHARED_STATE_DEGRADED._value.get() == 1
+        redis_client.set_redis_for_tests(fake_redis)   # Redis is back
+        redis_client._degraded = True
+        RateLimiter(max_requests=5, window_sec=60).check("k")
+        assert SHARED_STATE_DEGRADED._value.get() == 0
+
+
+class TestPrivacy:
+    def test_card_ids_not_in_redis_keys(self, fake_redis):
+        VelocityEngine().record("4111111111111111", 10.0, "m", "online")
+        keys = " ".join(fake_redis.keys("*"))
+        assert "4111111111111111" not in keys
+        assert card_ref("4111111111111111") in keys
+
+    def test_salt_changes_ref(self, monkeypatch):
+        a = card_ref("c")
+        monkeypatch.setenv("CARD_HASH_SALT", "pepper")
+        assert card_ref("c") != a

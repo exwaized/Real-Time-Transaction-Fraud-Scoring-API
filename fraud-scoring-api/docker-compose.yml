@@ -8,7 +8,11 @@ services:
       - "8000:8000"
     environment:
       - MODEL_DIR=/app/models
-      - FRAUD_API_KEY=${FRAUD_API_KEY:?set FRAUD_API_KEY in .env}
+      # Auth fails closed (503) unless at least one of these is set
+      - FRAUD_API_KEY=${FRAUD_API_KEY:-}
+      - FRAUD_API_KEYS=${FRAUD_API_KEYS:-}
+      - FRAUD_RATE_LIMITS=${FRAUD_RATE_LIMITS:-}
+      - CARD_HASH_SALT=${CARD_HASH_SALT:-}
       - ENV=${ENV:-development}
       - CHALLENGER_RATIO=0.10
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
@@ -61,6 +65,7 @@ services:
       - "127.0.0.1:9090:9090"
     volumes:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.retention.time=7d"

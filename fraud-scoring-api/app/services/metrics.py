@@ -4,7 +4,7 @@ Prometheus metrics. With multiple uvicorn workers, set PROMETHEUS_MULTIPROC_DIR
 """
 import os
 from prometheus_client import (
-    CollectorRegistry, Counter, Histogram, generate_latest,
+    CollectorRegistry, Counter, Gauge, Histogram, generate_latest,
     CONTENT_TYPE_LATEST, REGISTRY, multiprocess,
 )
 
@@ -26,6 +26,15 @@ CHALLENGER_DIVERGENCE = Histogram(
     buckets=(0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 1.0),
 )
 SIGNALS = Counter("fraud_api_signals_total", "Risk signals emitted", ["signal"])
+# 1 if Redis is configured but unavailable and shared state has degraded to
+# per-process, else 0. "max" across live workers, so one degraded worker shows
+# as 1. Initial value 0 = healthy, so a worker that hasn't touched Redis yet
+# (or REDIS_URL unset) never looks degraded.
+SHARED_STATE_DEGRADED = Gauge(
+    "fraud_api_shared_state_degraded",
+    "1 if Redis-backed shared state has degraded to per-process state",
+    multiprocess_mode="max",
+)
 SCORE_LATENCY = Histogram(
     "fraud_score_latency_seconds", "End-to-end /score handler latency",
     buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),

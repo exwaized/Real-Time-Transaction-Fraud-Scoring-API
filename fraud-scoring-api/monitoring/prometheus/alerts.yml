@@ -1,0 +1,38 @@
+groups:
+  - name: fraud-api
+    rules:
+      - alert: FraudApiDown
+        expr: up{job="fraud-api"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "fraud-api is not being scraped / is down"
+
+      - alert: RedisDegraded
+        # Shared state fell back to per-process: rate limits and velocity features are wrong.
+        expr: max(fraud_api_shared_state_degraded) == 1
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "Shared Redis state is degraded; velocity and rate limits are per-worker"
+
+      - alert: HighErrorRate
+        expr: sum(rate(fraud_api_errors_total[5m])) / clamp_min(sum(rate(fraud_api_requests_total[5m])) + sum(rate(fraud_api_errors_total[5m])), 1e-9) > 0.01
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "More than 1% of /score requests are failing with 500"
+
+      - alert: HighScoringLatency
+        expr: histogram_quantile(0.99, sum by (le) (rate(fraud_score_latency_seconds_bucket[5m]))) > 0.5
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "p99 /score latency above 500ms"
+
+      - alert: AdjudicatorFallbacks
+        expr: sum(rate(fraud_api_adjudicator_fallbacks_total[10m])) > 0.1
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Adjudicator sidecar failing; borderline scores are using the raw threshold"
