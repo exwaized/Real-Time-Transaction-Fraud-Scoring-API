@@ -25,3 +25,17 @@ class HealthResponse(BaseModel):
     model_threshold: float
     drift_status: dict
     uptime_sec: float
+
+
+class RealTransactionRequest(BaseModel):
+    """Features of the real-data model: amount plus the 28 anonymised PCA components."""
+    amount: float = Field(..., ge=0, example=149.62)
+    v: List[float] = Field(..., min_length=28, max_length=28,
+                           description="V1..V28 in order")
+
+
+class RealScoreResponse(BaseModel):
+    fraud_probability: float
+    decision: str
+    threshold_used: float
+    latency_ms: float

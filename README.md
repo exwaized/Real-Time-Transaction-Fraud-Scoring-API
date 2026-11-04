@@ -107,16 +107,39 @@ curl -X POST http://localhost:8000/score \
 
 ## Model Performance
 
-| Metric | Value |
-|--------|-------|
-| ROC-AUC | 0.989 |
-| Fraud F1 | 0.862 |
-| Threshold | 0.433 (tuned) |
-| Avg latency | ~9ms |
-| Training data | 10,000 txns, 3% fraud |
-| Imbalance fix | SMOTE 1:1 oversampling |
+### Real data (measured)
 
----
+Trained and evaluated on the real **ULB credit-card fraud dataset** (OpenML 1597):
+284,807 transactions, 9,144 exact duplicates removed -> 275,663 unique, 473 frauds (0.17%).
+Stratified 64/16/20 train/val/test split; the decision threshold is tuned on the validation
+slice and frozen before scoring the test set. No SMOTE and no class re-weighting
+(re-weighting with `scale_pos_weight` cut PR-AUC from ~0.86 to ~0.24 in testing).
+
+| Metric (held-out test set, 55,133 txns, 95 frauds) | Value |
+|---|---|
+| ROC-AUC | 0.978 |
+| PR-AUC (average precision) | 0.822 |
+| Precision at tuned threshold (0.2017) | 0.901 |
+| Recall at tuned threshold | 0.768 (73 of 95 frauds caught) |
+| F1 | 0.830 |
+| False alarms | 8 legitimate transactions flagged |
+| Model inference latency (single row, CPU) | p50 0.84 ms, p95 1.2 ms |
+
+Reproduce: `cd fraud-scoring-api && python train_real.py` then call `POST /score/real`
+with `amount` and the 28 PCA components `v` (V1..V28).
+
+Caveats: the OpenML copy has no `Time` column, so the split is random rather than
+chronological and scores may be slightly optimistic versus a time-ordered split. The
+features are anonymised PCA components, so the card-velocity features of the demo
+`/score` endpoint do not apply to this model. Latency is model-only; end-to-end API
+latency is higher.
+
+### Demo model on synthetic data (NOT real performance)
+
+`POST /score` uses a model trained by `train.py` on a generated 10,000-transaction
+dataset (3% fraud). Its metrics (ROC-AUC 0.989, F1 0.862, ~9 ms) describe how well it
+separates the generator's own fraud patterns, not real-world fraud, and should not be
+quoted as real performance.
 
 ## Architecture Notes
 

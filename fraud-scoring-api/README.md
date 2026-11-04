@@ -86,6 +86,8 @@ python load_test.py
 
 ## Model Card
 
+> **Note:** the figures in this section are from an earlier synthetic-data version and are kept for history. For measured results on real data (ROC-AUC 0.978, PR-AUC 0.822 on the ULB card-fraud dataset) see the top-level README and `train_real.py`.
+>
 > Trained on PaySim synthetic dataset (50K+ transactions, ~3.5% fraud rate)
 
 | Metric | Champion (LightGBM) | Challenger (XGBoost) |

@@ -1,7 +1,9 @@
 import logging
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends
-from app.models.schemas import TransactionRequest, FraudScoreResponse, HealthResponse
+from app.models.schemas import (TransactionRequest, FraudScoreResponse, HealthResponse,
+                                RealTransactionRequest, RealScoreResponse)
+from app.services.real_scorer import real_scorer
 from app.services.velocity import velocity_engine
 from app.services.scorer import fraud_scorer
 from app.services.drift import drift_monitor
@@ -87,6 +89,14 @@ def score_transaction(txn: TransactionRequest):
     except Exception as e:
         logger.error(f"Scoring error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/score/real", response_model=RealScoreResponse, dependencies=[Depends(protected)])
+def score_real(txn: RealTransactionRequest):
+    """Score with the model trained on the real ULB card-fraud data (see train_real.py)."""
+    if not real_scorer.available:
+        raise HTTPException(status_code=503, detail="Real-data model not trained: run train_real.py")
+    return real_scorer.score(txn.amount, txn.v)
 
 
 @router.get("/health", response_model=HealthResponse, dependencies=[Depends(protected)])

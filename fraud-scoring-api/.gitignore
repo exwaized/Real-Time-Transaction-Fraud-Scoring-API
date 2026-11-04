@@ -20,3 +20,6 @@ venv/
 .idea/
 
 
+
+# real dataset (downloaded by train_real.py)
+creditcard.csv
