@@ -1,0 +1,13 @@
+# Runtime dependencies for the serving image. requirements.txt stays the
+# full dev/CI set (tests, SHAP, MLflow, SMOTE).
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+pydantic==2.7.1
+numpy==1.26.4
+scipy==1.13.0
+scikit-learn==1.4.2
+lightgbm==4.3.0
+xgboost==2.0.3
+prometheus-client==0.20.0
+httpx==0.27.0
+redis==5.0.4

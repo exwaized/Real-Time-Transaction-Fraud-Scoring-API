@@ -1,0 +1,13 @@
+.git
+.env
+__pycache__/
+**/__pycache__/
+*.pyc
+tests/
+monitoring/
+semif_sidecar/
+*.md
+.verify_*.py
+# models are trained inside the image build, never copied from the host
+app/models/*.pkl
+app/models/meta.json

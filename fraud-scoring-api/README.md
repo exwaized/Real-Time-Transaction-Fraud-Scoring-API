@@ -64,143 +64,101 @@ Alertmanager to get paged): API down, Redis degraded (`fraud_api_shared_state_de
 ## Architecture
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│                    FRAUD SCORING API                           │
-│                                                                │
-│  POST /score ──► Rule Pre-Filter ──► Champion/Challenger       │
-│                       │                    Router (90/10)      │
-│                       ▼                         │              │
-│               [amt_3x, foreign,          ┌──────┴──────┐      │
-│                velocity, drain]          │             │      │
-│                       │              Champion      Challenger  │
-│                       ▼             LightGBM        XGBoost   │
-│               Rule Boost (+score)       │             │        │
-│                       │                └──────┬──────┘        │
-│                       ▼                       ▼               │
-│               SHAP top_3_factors     Divergence Logger        │
-│                       │              (delta → Prometheus)      │
-│                       ▼                                        │
-│               Risk Tier Assignment                             │
-│               [low / medium / high / critical]                 │
-│                       │                                        │
-│                       ▼                                        │
-│               Structured JSON Log + Prometheus Metrics         │
-│                                                                │
-│  ┌─────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│  │ /threshold  │  │ /challenger/ │  │ Rolling Fraud Rate   │  │
-│  │ ?fpr=0.01   │  │  divergence  │  │ Alert if >2% / 5min  │  │
-│  └─────────────┘  └──────────────┘  └──────────────────────┘  │
-└────────────────────────────────────────────────────────────────┘
-         │                   │                   │
-    Prometheus            Grafana             MLflow
-    (metrics)           (dashboard)          (registry)
+POST /score
+   │
+   ├─ API key check (per-client) ─► rate limit (per client, Redis or in-process)
+   │
+   ├─ velocity features per card (1h/24h counts, 7-day mean and z-score)
+   │
+   ├─ Champion (LightGBM) and Challenger (XGBoost) both score
+   │     └─ ~10% of traffic is routed to the challenger (CHALLENGER_RATIO)
+   │
+   ├─ threshold decision: ALLOW / BLOCK
+   │     └─ optional adjudicator reviews scores near the threshold
+   │        (fails open to the raw decision)
+   │
+   └─ response + Prometheus metrics + divergence log
+
+Background: drift monitor (score shift and PSI) logs CRITICAL and can post to Slack.
+Shared state (velocity, profiles, rate limits) uses Redis when REDIS_URL is set;
+otherwise each worker keeps its own, so run a single worker.
 ```
 
 ---
 
 ## Model Card
 
-> Trained on PaySim synthetic dataset (50K+ transactions, ~3.5% fraud rate)
+> **Demo data, not a benchmark.** `train.py` generates 10,000 synthetic card
+> transactions (3% fraud, seed 42). Fraud and legitimate rows are drawn from
+> clearly different distributions (fraud: larger amounts, night hours,
+> electronics/online/ATM), so both models separate them almost perfectly on the
+> 20% held-out split. The point of this repo is the serving, monitoring and
+> safety layers around a model, not model quality. Real transaction data would
+> score far lower.
 
-| Metric | Champion (LightGBM) | Challenger (XGBoost) |
+| | Champion | Challenger |
 |---|---|---|
-| **AUC-ROC** | ~0.978 | ~0.971 |
-| **KS Statistic** | ~0.82 | ~0.79 |
-| **Gini Coefficient** | ~0.956 | ~0.942 |
-| **Precision @ Top 5%** | ~0.91 | ~0.88 |
-| **FPR @ Chosen Threshold** | ~1.0% | ~1.2% |
-| **Threshold (FPR=1%)** | ~0.42 | ~0.45 |
+| Algorithm | LightGBM, SMOTE on the training split | XGBoost, `scale_pos_weight` |
+| ROC-AUC (held-out 20%) | 1.000 | 1.000 |
+| Decision threshold (F1-optimal) | 0.984 | 0.999 |
 
-> ⚠️ Actual values vary per run. Re-run `train.py` on your dataset.
-> p99 latency: **~18ms** (single worker, local CPU) — ✅ sub-50ms target met
-
-**Class Imbalance Handling:**
-- Champion: SMOTE applied post-split (training set only)
-- Challenger: `scale_pos_weight` = class ratio
-
-**Feature Importance (Champion top 5):**
-1. `balance_drain_ratio` — full balance drain is strongest fraud signal
-2. `amt_vs_avg_ratio` — deviation from historical card average
-3. `amt_zscore` — standardized deviation
-4. `is_foreign_txn` — cross-border card activity
-5. `merchant_risk_score` — category-level risk prior
+Metrics come from `train.py` and are written to `app/models/meta.json`
+(`GET /model/info`). Latency depends on hardware: run `load_test.py` to measure it.
+In a local Docker run the first request after startup took about 46 ms.
 
 ---
 
-## Feature Engineering
+## Features
 
-| Feature | Description | Fraud Signal |
-|---|---|---|
-| `amt_vs_avg_ratio` | TxnAmt / card historical avg | >3x → high risk |
-| `amt_zscore` | Standardized deviation from card mean | Outlier → risk |
-| `velocity_1hr_bucket` | Bucketed txn count (0-3) | High bucket → risk |
-| `balance_drain_ratio` | (before-after)/before | >0.95 → critical |
-| `is_foreign_txn` | card_country ≠ US | +flag → boost |
-| `merchant_risk_score` | Category prior (R=0.12, W=0.02) | High → risk |
-| `is_night` | hour ≥ 22 or ≤ 6 | Night txn → elevated |
-| `rule_flag` | Binary: amt_3x OR foreign | Direct feature |
+Model inputs (`app/services/scorer.py`): `amount`, `hour`, `day_of_week`, and a
+one-hot `merchant_category` (electronics, online, atm, travel, grocery, fuel,
+restaurant, pharmacy).
+
+Velocity signals are computed per card at request time
+(`app/services/velocity.py`) and returned in `top_signals` / `velocity`. They
+explain a decision but are not inputs to the model: 1h and 24h transaction
+counts, unique merchants in 1h, 7-day mean and z-score of the amount, and time
+since the last transaction.
 
 ---
 
 ## API Reference
 
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/score` | `X-API-Key` | Score a transaction |
+| GET | `/healthz` | none | Liveness probe |
+| GET | `/health` | `X-API-Key` | Model threshold, drift status, uptime |
+| GET | `/model/info` | `X-API-Key` | Training metadata and feature importances |
+| GET | `/challenger/divergence` | `X-API-Key` | Last 100 champion vs challenger deltas |
+| GET | `/metrics` | none | Prometheus metrics (keep internal) |
+
 ### `POST /score`
 ```json
 Request:
 {
-  "transaction_id": "TXN_001",
-  "card_id": 4521,
-  "transaction_amt": 1800.0,
-  "product_cd": "W",
-  "transaction_dt": 1700000000,
-  "balance_before": 2000.0,
-  "balance_after": 200.0,
-  "merchant_id": 321,
-  "card_country": "NG",
-  "card_txn_count_24hr": 18,
-  "merchant_txn_freq": 45
+  "card_id": "card_0042",
+  "merchant_id": "merch_017",
+  "amount": 12400.00,
+  "merchant_category": "electronics",
+  "timestamp": "2025-05-19T03:22:11"
 }
 
-Response:
+Response (abridged):
 {
-  "transaction_id": "TXN_001",
-  "fraud_score": 0.871,
-  "risk_tier": "critical",
-  "top_3_risk_factors": [
-    {"feature": "balance_drain_ratio", "importance": 0.312},
-    {"feature": "is_foreign_txn", "importance": 0.241},
-    {"feature": "amt_vs_avg_ratio", "importance": 0.198}
-  ],
-  "rule_flags": ["foreign_transaction", "near_full_balance_drain", "high_velocity_24hr"],
+  "card_id": "card_0042",
+  "fraud_probability": 1.0,
+  "champion_probability": 1.0,
+  "challenger_probability": 0.9999,
   "model_used": "champion_lgbm",
-  "latency_ms": 14.3,
-  "timestamp": "2024-11-14T10:22:31"
+  "decision": "BLOCK",
+  "threshold_used": 0.984,
+  "top_signals": ["fraud_probability=1.0000 (model score above threshold)"],
+  "velocity": {"txn_count_1hr": 0, "amount_zscore": 0.0, "...": "..."},
+  "latency_ms": 46.25,
+  "reviewed": false
 }
 ```
-
-### `POST /threshold?fpr=0.01`
-Returns the score cutoff that achieves the target false positive rate.
-
-### `GET /challenger/divergence`
-Returns last 100 Champion vs Challenger score delta records.
-
-### `GET /metrics`
-Prometheus metrics endpoint (scraped every 10s).
-
----
-
-## Amex CFR Alignment
-
-| JD Keyword | This Project |
-|---|---|
-| **"minimize disruption of good spending"** | FPR-calibrated threshold endpoint (`/threshold?fpr=0.01`) minimizes false positives on legitimate transactions |
-| **"closed-loop through Amex network"** | Challenger-Champion pattern logs divergence for offline model improvement — mirrors production A/B testing feedback loop |
-| **"predictive model development, deployment, validation"** | Full pipeline: feature engineering → SMOTE → train → MLflow registry → FastAPI serving → pytest validation suite |
-| **"leverage data and digital advancements"** | SHAP explainability, Prometheus/Grafana observability, structured audit logging |
-| **"profitable decisions across risk and fraud"** | Risk tier segmentation (low/medium/high/critical) enables tiered decision logic: auto-decline vs step-up auth vs review |
-| **"large amounts of data → business insights"** | Velocity, behavioral, and merchant-level aggregates surface actionable signals, not raw scores |
-| **"big data & ML innovation"** | LightGBM + XGBoost ensemble strategy; rule-hybrid scoring; Monte Carlo-ready threshold calibration |
-| **"clear articulation to leadership"** | Grafana dashboard shows fraud rate, tier breakdown, latency SLOs — ready for exec review |
 
 ---
 
@@ -220,13 +178,16 @@ When challenger consistently outperforms (lower divergence at lower FPR), swap m
 
 | Signal | Metric |
 |---|---|
-| Throughput | `fraud_api_requests_total{risk_tier, model}` |
-| Latency | `fraud_score_latency_seconds` (p50/p95/p99) |
-| Fraud Rate | `fraud_rate_rolling_5min` (5-min rolling window) |
-| Score Distribution | `fraud_score_distribution` histogram |
-| Rule Triggers | `rule_based_flags_total{rule}` |
-| Model Divergence | `challenger_score_divergence` histogram |
-| Alert Threshold | Fraud rate > 2% in 5min → CRITICAL log + Slack webhook |
+| Requests | `fraud_api_requests_total` (by outcome) |
+| Errors | `fraud_api_errors_total` |
+| Latency | `fraud_score_latency_seconds` |
+| Score distribution | `fraud_score_distribution` histogram |
+| Risk signals | `fraud_api_signals_total{signal}` |
+| Model divergence | `challenger_score_divergence` histogram |
+| Adjudicator fallbacks | `fraud_api_adjudicator_fallbacks_total` |
+| Redis degraded | `fraud_api_shared_state_degraded` (1 = per-process fallback) |
+| Drift | Score-mean shift > 0.15 or PSI > 0.20 logs CRITICAL, and posts to Slack if `SLACK_WEBHOOK_URL` is set |
+
 
 ---
 
@@ -234,23 +195,19 @@ When challenger consistently outperforms (lower divergence at lower FPR), swap m
 
 ```
 fraud-scoring-api/
-├── train.py                    # ML training pipeline
-├── load_test.py                # Latency benchmark
-├── requirements.txt
-├── Dockerfile
-├── docker-compose.yml
+├── train.py                    # trains champion + challenger on synthetic data
+├── main.py                     # FastAPI app
+├── load_test.py                # latency benchmark
+├── requirements.txt            # full dev/CI set
+├── requirements-serve.txt      # runtime set used by the Docker image
+├── requirements-train.txt      # training stage of the Docker build
+├── Dockerfile                  # multi-stage: train, then slim serving image
+├── docker-compose.yml          # API + Redis + Prometheus + Grafana + sidecar
 ├── app/
-│   └── main.py                 # FastAPI app
-├── models/                     # Generated by train.py
-│   ├── champion_lgbm.pkl
-│   ├── challenger_xgb.pkl
-│   └── model_meta.json
-├── tests/
-│   └── test_api.py             # pytest suite (25 tests)
-├── monitoring/
-│   ├── prometheus/prometheus.yml
-│   └── grafana/
-│       ├── dashboards/fraud_api.json
-│       └── provisioning/
-└── README.md
+│   ├── routers/score.py        # endpoints
+│   ├── services/               # scorer, velocity, drift, auth, rate limit, redis, metrics
+│   └── models/                 # schemas, plus .pkl artifacts generated by train.py
+├── tests/test_api.py           # pytest suite
+├── monitoring/                 # Prometheus + Grafana config
+└── semif_sidecar/              # optional borderline-score adjudicator
 ```
