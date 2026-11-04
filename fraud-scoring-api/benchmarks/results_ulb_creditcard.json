@@ -1,0 +1,56 @@
+{
+  "dataset": "ULB credit card fraud (mlg-ulb/creditcardfraud)",
+  "split": "time-ordered 60/20/20 (train/validation/test)",
+  "rows": {
+    "train": 170884,
+    "validation": 56961,
+    "test": 56962
+  },
+  "fraud": {
+    "train": 360,
+    "validation": 57,
+    "test": 75
+  },
+  "seed": 42,
+  "models": {
+    "champion_lightgbm_smote": {
+      "roc_auc": 0.9604,
+      "pr_auc": 0.7861,
+      "recall_at_1pct_fpr": 0.84,
+      "threshold": 0.981,
+      "precision": 0.918,
+      "recall": 0.7467,
+      "f1": 0.8235,
+      "tp": 56,
+      "fp": 5,
+      "fn": 19,
+      "tn": 56882
+    },
+    "challenger_xgboost": {
+      "roc_auc": 0.9808,
+      "pr_auc": 0.7794,
+      "recall_at_1pct_fpr": 0.8533,
+      "threshold": 0.9547,
+      "precision": 0.8833,
+      "recall": 0.7067,
+      "f1": 0.7852,
+      "tp": 53,
+      "fp": 7,
+      "fn": 22,
+      "tn": 56880
+    },
+    "baseline_logistic_regression": {
+      "roc_auc": 0.9819,
+      "pr_auc": 0.7419,
+      "recall_at_1pct_fpr": 0.8667,
+      "threshold": 1.0,
+      "precision": 0.9434,
+      "recall": 0.6667,
+      "f1": 0.7812,
+      "tp": 50,
+      "fp": 3,
+      "fn": 25,
+      "tn": 56884
+    }
+  }
+}

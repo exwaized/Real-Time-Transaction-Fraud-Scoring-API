@@ -105,6 +105,43 @@ otherwise each worker keeps its own, so run a single worker.
 Metrics come from `train.py` and are written to `app/models/meta.json`
 (`GET /model/info`). Latency depends on hardware: run `load_test.py` to measure it.
 In a local Docker run the first request after startup took about 46 ms.
+`train.py` picks each threshold on the same held-out split it reports on, so
+treat those numbers as optimistic; the real-data benchmark below picks the
+threshold on a separate validation slice.
+
+### Real-data benchmark (ULB credit card fraud)
+
+The same recipe (LightGBM + SMOTE champion, XGBoost challenger) run on a real
+public dataset: the ULB / Worldline European card transactions from Kaggle
+([mlg-ulb/creditcardfraud](https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud)),
+284,807 transactions over two days, 0.17% fraud. Features are anonymised PCA
+components (`V1`..`V28`) plus `Amount`. The data is not stored in this repo;
+see the Kaggle page for its licence and citation.
+
+Split by time: first 60% train, next 20% validation (threshold chosen here),
+last 20% test (scored once). The test slice holds 56,962 transactions, 75 of
+them fraud.
+
+| Model | ROC-AUC | PR-AUC | Precision | Recall | F1 | Recall at 1% FPR |
+|---|---|---|---|---|---|---|
+| Champion: LightGBM + SMOTE | 0.960 | **0.786** | 0.918 | 0.747 | **0.824** | 0.840 |
+| Challenger: XGBoost | 0.981 | 0.779 | 0.883 | 0.707 | 0.785 | 0.853 |
+| Baseline: logistic regression | 0.982 | 0.742 | 0.943 | 0.667 | 0.781 | 0.867 |
+
+How to read it:
+- With only 75 fraud cases in the test slice, one more or fewer caught changes
+  recall by about 1.3 points. The three models are closer than the table makes
+  them look, and the plain logistic regression baseline is competitive.
+- PR-AUC is the more useful number at this imbalance; ROC-AUC flatters all three.
+- These features are anonymised, so this model cannot be served through `/score`,
+  which takes card, merchant, amount and category. The served model is still the
+  synthetic demo above; this benchmark shows the training recipe holds up on real data.
+
+Reproduce it (full output in `benchmarks/results_ulb_creditcard.json`):
+
+```bash
+python benchmarks/real_data_benchmark.py /path/to/creditcard.csv --out results.json
+```
 
 ---
 
